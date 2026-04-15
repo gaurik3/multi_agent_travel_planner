@@ -1,4 +1,4 @@
-# ✈ Multi-Agent Travel Planner
+#  Multi-Agent Travel Planner
 
 A Python application that takes your travel inputs and produces a complete, human-approved travel plan — built as a learning project for **LangGraph multi-agent workflows**.
 
