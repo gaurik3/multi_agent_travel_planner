@@ -1,14 +1,79 @@
-#  Multi-Agent Travel Planner
+# ✈️ Multi-Agent Travel Planner
 
-A Python application that takes your travel inputs and produces a complete, human-approved travel plan — built as a learning project for **LangGraph multi-agent workflows**.
+> A production-grade AI travel planning system built with LangGraph, powered by Azure OpenAI GPT-4o. It orchestrates a team of specialized agents to research destinations, plan budgets, find flights and hotels, craft day-by-day itineraries, and validate the complete plan — all with human-in-the-loop checkpoints, full observability, and cost guardrails.
+
+---
+
+## 📋 Table of Contents
+
+- [What This Project Does](#what-this-project-does)
+- [Capabilities](#capabilities)
+- [Architecture](#architecture)
+- [Agent Pipeline](#agent-pipeline)
+- [Tech Stack](#tech-stack)
+- [Project Structure](#project-structure)
+- [Setup & Installation](#setup--installation)
+- [Configuration](#configuration)
+- [Running the Planner](#running-the-planner)
+- [Modules Overview](#modules-overview)
+- [Observability & Logs](#observability--logs)
+- [Cost Guardrails](#cost-guardrails)
+- [Prompt Versioning](#prompt-versioning)
+- [Travel Style Classifier](#travel-style-classifier)
 
 ---
 
 ## What This Project Does
 
-You type in a destination, origin, dates, number of travellers, and budget. Seven AI agents then work in sequence — each doing one specific job — and the result is a full travel plan including flight options, hotel options, a day-by-day itinerary, budget breakdown, visa info, and travel tips.
+The Multi-Agent Travel Planner takes your destination, travel dates, number of travellers, and budget — then autonomously coordinates a pipeline of AI agents to produce a complete, validated travel plan. It pauses at two human checkpoints so you can select your preferred flight and approve (or request changes to) the itinerary before the final plan is generated and saved.
 
-The graph pauses **twice** for your input: once to let you pick a flight, and once to approve (or request changes to) the final itinerary. If you reject a flight or ask for changes, the relevant agent re-runs automatically. After three failed retries, the graph exits cleanly with a helpful error message.
+---
+
+## Capabilities
+
+### 🤖 Multi-Agent Orchestration
+Six specialized agents each own one domain of travel planning. An **Orchestrator** routes between them based on state, retries, and cost/retry guardrails. No agent does more than its job.
+
+### 🗺️ End-to-End Plan Generation
+From a single prompt, the system produces:
+- A destination overview, visa requirements for Indian passport holders, and practical travel tips
+- A realistic budget breakdown across flights, hotels, food, activities, and a buffer
+- Three realistic flight options with pros, cons, prices, and timings
+- Three hotel options at different price points with check-in/out dates
+- A detailed day-by-day itinerary with specific attraction names, costs in local currency, meal suggestions, and timing
+- A validation pass checking for scheduling conflicts, budget overruns, and date mismatches
+
+### 🧑‍💻 Human-in-the-Loop Checkpoints
+The graph **interrupts** at two points and waits for human input before continuing:
+- **Checkpoint 1** — You choose a flight option (or reject all and get new ones)
+- **Checkpoint 2** — You review the full itinerary, select a hotel, and approve or request changes. The itinerary regenerates with your feedback incorporated.
+
+### 🔁 Retry & Feedback Loops
+If you reject flight options or request itinerary changes, the relevant agent reruns (up to 3 times) incorporating your feedback before re-presenting options.
+
+### 🏷️ Travel Style Classification
+Before the pipeline starts, a lightweight classifier analyses your budget-per-person-per-day and destination type to label the trip as **budget**, **mid-range**, **luxury**, or **adventure**. This label is passed to the itinerary agent to calibrate recommendations appropriately.
+
+### 📊 Full Observability
+Every LLM call is logged to a local SQLite database with: agent name, prompt version, token counts (in/out), latency in ms, cost in USD, retry count, and success/failure. Two CLI scripts let you inspect any run or list all past runs.
+
+### 💰 Cost Guardrails
+Hard token caps per agent and a soft USD cap per full run prevent runaway spending. The orchestrator checks both limits before routing to the next agent and short-circuits to a safe exit if either is breached.
+
+### 🔖 Prompt Versioning
+Every agent's system prompt lives in a versioned YAML file under `prompts/<agent>/v1.yaml`. Swapping to a new prompt version requires no code changes — just add a `v2.yaml`. The active version used in each run is recorded in state and printed in the final plan.
+
+### 🛡️ Typed Failure Handling
+When the pipeline fails, a `FailureClassifier` inspects the error and assigns one of six typed failure categories (`api_failure`, `prompt_parse_failure`, `validation_conflict`, `human_rejection`, `retry_exhaustion`, `cost_limit_exceeded`) before persisting the run record and printing an actionable exit message.
+
+### 💾 Persistent Checkpointing
+LangGraph state is checkpointed to SQLite after every node, so interrupted runs can theoretically be resumed and the full state history is preserved per thread.
+
+### 📄 Formatted Plan Output
+The final plan is printed to the terminal and automatically saved as a timestamped `.txt` file. It includes a visual budget utilisation bar, all selected options, the full itinerary, validation notes, and an LLM usage summary.
+
+### 🖼️ Graph Diagram Export
+On startup, the agent graph is rendered as an ASCII diagram in the terminal and exported as a `graph_diagram.png` for visual documentation.
 
 ---
 
@@ -19,51 +84,62 @@ User Input
     │
     ▼
 ┌─────────────────────────────────────────────────────────┐
-│                      ORCHESTRATOR                       │
-│          (no LLM — pure routing logic)                  │
-└────────────┬────────────────────────────────────────────┘
-             │ reads state["status"], decides next node
-             ▼
-    ┌────────────────┐
-    │    research    │  ← destination info, visa, tips
-    └───────┬────────┘
-            ▼
-    ┌────────────────┐
-    │     budget     │  ← INR breakdown across categories
-    └───────┬────────┘
-            ▼
-    ┌────────────────┐
-    │    flights     │  ← 3 realistic flight options
-    └───────┬────────┘
-            ▼
-    ┌────────────────┐
-    │  checkpoint_1  │  ← ⏸ PAUSE: you pick a flight
-    └───────┬────────┘
-            ▼
-    ┌────────────────┐
-    │     hotels     │  ← 3 hotel options
-    └───────┬────────┘
-            ▼
-    ┌────────────────┐
-    │   itinerary    │  ← day-by-day plan with times
-    └───────┬────────┘
-            ▼
-    ┌────────────────┐
-    │    validate    │  ← checks dates, budget, conflicts
-    └───────┬────────┘
-            ▼
-    ┌────────────────┐
-    │  checkpoint_2  │  ← ⏸ PAUSE: you approve or request changes
-    └───────┬────────┘
-            ▼
-    ┌────────────────┐
-    │   final_plan   │  ← formatted plan printed + saved to .txt
-    └───────┬────────┘
-            ▼
-           END
+│               Travel Style Classifier                   │
+│  (budget / mid-range / luxury / adventure)              │
+└──────────────────────┬──────────────────────────────────┘
+                       │
+                       ▼
+┌─────────────────────────────────────────────────────────┐
+│                    Orchestrator                         │
+│   Routes between agents based on status, retries,       │
+│   cost guardrails, and route map                        │
+└──┬──────┬──────┬──────┬──────┬──────┬──────┬──────┬────┘
+   │      │      │      │      │      │      │      │
+   ▼      ▼      ▼      ▼      ▼      ▼      ▼      ▼
+Research Budget Flights [CP1] Hotels Itinerary Validate [CP2]
+                         ▲                              ▲
+                    Human Input                    Human Input
+                   (flight choice)          (hotel + plan approval)
+                                                        │
+                                                        ▼
+                                                  Final Plan
+                                             (terminal + .txt file)
 ```
 
-If any agent fails or retries exceed 3, the graph routes to a **safe exit node** that prints a clean error message instead of crashing.
+Every agent feeds back into the Orchestrator, which decides the next step based on the `status` field in the shared `TravelPlanState`.
+
+---
+
+## Agent Pipeline
+
+| Step | Agent | What it does |
+|------|-------|-------------|
+| 1 | **Research** | Fetches destination overview, visa info for Indian passport holders, and 8 practical travel tips |
+| 2 | **Budget** | Splits the total INR budget across flights, hotels, food, activities, and a buffer |
+| 3 | **Flights** | Generates 3 realistic flight options with timings, prices, pros, and cons |
+| — | **Checkpoint 1** | ⏸️ Pauses for human flight selection or rejection |
+| 4 | **Hotels** | Generates 3 hotel options at budget/mid/luxury tiers |
+| 5 | **Itinerary** | Creates a detailed day-by-day plan incorporating flights, hotel, budget, and travel style |
+| 6 | **Validator** | Runs local sanity checks then an LLM deep-review for scheduling and budget conflicts |
+| — | **Checkpoint 2** | ⏸️ Pauses for hotel selection and plan approval or change requests |
+| 7 | **Final Plan** | Renders the complete formatted plan, saves to file, persists the run record |
+
+---
+
+## Tech Stack
+
+| Category | Technology |
+|----------|-----------|
+| **Agent orchestration** | [LangGraph](https://github.com/langchain-ai/langgraph) ≥ 0.2.0 |
+| **LLM framework** | [LangChain](https://github.com/langchain-ai/langchain) ≥ 0.2.0 |
+| **LLM provider** | [Azure OpenAI](https://azure.microsoft.com/en-us/products/ai-services/openai-service) (GPT-4o / GPT-4o-mini) via `langchain-openai` |
+| **State persistence** | SQLite via `langgraph-checkpoint-sqlite` |
+| **Observability DB** | SQLite (local `data/runs.db`) |
+| **Prompt management** | YAML files (`pyyaml`) with auto-version selection |
+| **Retry logic** | `tenacity` — exponential backoff on API errors |
+| **Graph visualisation** | `matplotlib`, `grandalf` (ASCII + PNG export) |
+| **Environment config** | `python-dotenv` |
+| **Language** | Python 3.10+ |
 
 ---
 
@@ -71,101 +147,101 @@ If any agent fails or retries exceed 3, the graph routes to a **safe exit node**
 
 ```
 travel-planner/
-├── .env                        ← your Azure OpenAI credentials (never commit this)
+│
+├── main.py                        # Entry point — CLI, classifier, graph invocation
+├── graph.py                       # LangGraph StateGraph definition
+├── state.py                       # TravelPlanState TypedDict (all shared fields)
 ├── requirements.txt
-├── main.py                     ← entry point — run this
-├── state.py                    ← TravelPlanState TypedDict (shared across all nodes)
-├── graph.py                    ← graph assembly + MemorySaver compilation
 │
 ├── agents/
-│   ├── orchestrator.py         ← routing logic + retry_count guard
-│   ├── research.py             ← destination info, visa, tips
-│   ├── budget.py               ← INR budget breakdown
-│   ├── flights.py              ← 3 flight options (LLM-generated)
-│   ├── hotels.py               ← 3 hotel options (LLM-generated)
-│   ├── itinerary.py            ← day-by-day plan
-│   └── validator.py            ← local checks + LLM deep review
+│   ├── orchestrator.py            # Routes between agents; enforces cost/retry guards
+│   ├── research.py                # Destination info, visa, travel tips
+│   ├── budget.py                  # INR budget breakdown
+│   ├── flights.py                 # 3 flight options as JSON
+│   ├── hotels.py                  # 3 hotel options as JSON
+│   ├── itinerary.py               # Day-by-day itinerary (plain text)
+│   └── validator.py               # Local checks + LLM deep review
 │
 ├── checkpoints/
-│   ├── checkpoint_1.py         ← flight selection HITL node
-│   └── checkpoint_2.py         ← final approval HITL node
+│   ├── checkpoint_1.py            # Flight selection logic
+│   └── checkpoint_2.py            # Hotel selection + plan approval logic
 │
-└── utils/
-    ├── llm.py                  ← AzureChatOpenAI init + call_llm_safe() with retry
-    ├── error_handler.py        ← @safe_node decorator for all agents
-    ├── safe_exit.py            ← safe exit node
-    ├── final_plan.py           ← formatter + .txt file save
-    └── diagram.py              ← ASCII terminal diagram + PNG export
+├── utils/
+│   ├── llm.py                     # call_llm_safe() with logging + cost tracking
+│   ├── prompt_loader.py           # Loads versioned YAML prompts
+│   ├── cost_guard.py              # Token caps, USD cost estimation, guardrail checks
+│   ├── logger.py                  # SQLite logging for LLM calls and run records
+│   ├── failure_classifier.py      # Typed failure classification (6 categories)
+│   ├── error_handler.py           # @safe_node decorator for agent exception handling
+│   ├── final_plan.py              # Formatted plan renderer + file saver
+│   ├── safe_exit.py               # Graceful failure handler with classified exit
+│   └── diagram.py                 # ASCII + PNG graph diagram export
+│
+├── prompts/
+│   ├── research/   v1.yaml, v2.yaml
+│   ├── budget/     v1.yaml
+│   ├── flights/    v1.yaml
+│   ├── hotels/     v1.yaml
+│   ├── itinerary/  v1.yaml
+│   └── validator/  v1.yaml
+│
+├── classifier/
+│   ├── travel_style_classifier.py # Rule-based classifier (budget/mid/luxury/adventure)
+│   ├── model_metadata.yaml        # Model version, thresholds, training data reference
+│   └── training_data_v1.csv       # Labelled samples for future ML upgrade
+│
+├── scripts/
+│   ├── inspect_run.py             # CLI: print all logs for a run_id
+│   └── list_runs.py               # CLI: list all past runs with status + cost
+│
+└── data/
+    └── runs.db                    # Auto-created SQLite database
 ```
 
 ---
 
-## Tech Stack
+## Setup & Installation
 
-| Component | Technology |
-|---|---|
-| Agent orchestration | LangGraph >= 0.2.0 |
-| LLM | Azure OpenAI — GPT-4o |
-| LLM client | LangChain + langchain-openai |
-| State persistence | LangGraph MemorySaver (in-memory) |
-| Retry logic | tenacity (exponential backoff) |
-| Graph diagram | grandalf (ASCII) + matplotlib (PNG) |
-| Environment vars | python-dotenv |
-| Python | 3.11+ |
+### Prerequisites
 
-Flight and hotel data is **LLM-generated** (realistic but not from a live booking API) — this is intentional for a learning project.
+- Python 3.10 or higher
+- An [Azure OpenAI](https://azure.microsoft.com/en-us/products/ai-services/openai-service) resource with a GPT-4o or GPT-4o-mini deployment
 
----
-
-## Setup
-
-### 1. Prerequisites
-
-- Python 3.11 or higher
-- An Azure OpenAI resource with a GPT-4o deployment
-- The four Azure credentials from your Azure portal
-
-### 2. Clone / download the project
-
-```
-travel-planner/
-└── (all files as shown in the structure above)
-```
-
-### 3. Create a virtual environment
+### Install
 
 ```bash
-python -m venv venv
+git clone https://github.com/your-username/travel-planner.git
+cd travel-planner
 
-# Mac / Linux
+python -m venv venv
+# Windows
+venv\Scripts\activate
+# macOS/Linux
 source venv/bin/activate
 
-# Windows (PowerShell — run this first if you get an execution policy error)
-Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
-venv\Scripts\activate
-
-# Windows (Command Prompt)
-venv\Scripts\activate.bat
-```
-
-### 4. Install dependencies
-
-```bash
 pip install -r requirements.txt
 ```
 
-### 5. Create your `.env` file
+For the ASCII graph diagram, also install `grandalf`:
 
-Create a file called `.env` in the project root (same folder as `main.py`) with your Azure OpenAI credentials:
-
+```bash
+pip install grandalf
 ```
-AZURE_OPENAI_ENDPOINT=https://your-resource-name.openai.azure.com
-AZURE_OPENAI_DEPLOYMENT=gpt-4o
+
+---
+
+## Configuration
+
+Create a `.env` file in the project root:
+
+```env
+AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com/
+AZURE_OPENAI_DEPLOYMENT=gpt-4o-mini
 AZURE_OPENAI_API_KEY=your-api-key-here
-AZURE_OPENAI_API_VERSION=2024-12-01-preview
+AZURE_OPENAI_API_VERSION=2024-02-01
 ```
 
-> **Important:** No spaces around `=`. No quotes around values. Never commit this file to git.
+All four variables are required. The app will fail with a clear error message if any are missing.
 
 ---
 
@@ -175,187 +251,127 @@ AZURE_OPENAI_API_VERSION=2024-12-01-preview
 python main.py
 ```
 
-You will be asked for:
+You will be prompted for:
 
-```
-Destination (e.g. Paris, France): Dubai
-Origin city (e.g. New Delhi, India): New Delhi
-Travel dates (e.g. 15 June 2025 to 25 June 2025): 30 July 2026 to 5 August 2026
-Number of travellers: 2
-Total budget in INR (e.g. 200000): 200000
-```
+1. **Destination** — e.g. `Paris, France`
+2. **Origin city** — e.g. `New Delhi, India`
+3. **Travel dates** — e.g. `15 June 2025 to 25 June 2025`
+4. **Number of travellers** — e.g. `2`
+5. **Total budget in INR** — e.g. `200000`
 
-The agents then run in sequence. You will be prompted **twice**:
+After confirmation, agents run automatically. You will be prompted twice:
 
-**Checkpoint 1 — Flight selection:**
-```
-Enter 1, 2, or 3 to select a flight, or 'reject' for new options: 1
-```
+- **Checkpoint 1**: Enter `1`, `2`, or `3` to pick a flight, or `reject` to get new options
+- **Checkpoint 2**: Enter `approve` to accept the plan, or describe changes (e.g. `more free time on day 3`, `hotel:2`)
 
-**Checkpoint 2 — Final approval:**
-```
-Type 'approve' to accept this plan.
-Or describe what you'd like changed (e.g. 'more free time on day 3')
-
-Your response: approve
-```
-
-On completion, the full plan is:
-- Printed to the terminal
-- Saved automatically as `travel_plan_Dubai_20260730_143022.txt` in the project folder
-- The graph diagram is saved as `graph_diagram.png`
+The final plan is printed to the terminal and saved as `travel_plan_<destination>_<timestamp>.txt`.
 
 ---
 
-## How the State Works
+## Modules Overview
 
-Every node reads from and writes to a single shared `TravelPlanState` TypedDict. LangGraph passes it between nodes automatically — no agent ever calls another agent directly.
+### Module 1 — Prompt Versioning
+System prompts are stored as YAML files in `prompts/<agent>/v*.yaml`. `prompt_loader.py` auto-selects the latest version. To A/B test a new prompt, add `v2.yaml` — no code changes needed. The version used per agent is recorded in `TravelPlanState.prompt_versions_used` and printed in the final plan.
 
-```python
-class TravelPlanState(TypedDict):
-    # User inputs
-    destination: str
-    origin: str
-    travel_dates: str
-    num_travelers: int
-    budget_inr: float
+### Module 2 — Observability
+`utils/logger.py` writes to two SQLite tables on every run:
+- `llm_calls` — one row per LLM invocation with tokens, latency, cost, success/failure
+- `run_records` — one summary row per complete run
 
-    # Filled in progressively by agents
-    destination_info: str
-    visa_info: str
-    best_travel_tips: str
-    budget_breakdown: dict
-    flight_options: list
-    selected_flight: dict
-    hotel_options: list
-    selected_hotel: dict
-    itinerary: str
-    validation_notes: str
-
-    # Human interaction
-    human_feedback_1: str    # "1" / "2" / "3" / "reject"
-    human_feedback_2: str    # "approve" or change description
-
-    # Control flow
-    status: str              # routing signal read by orchestrator
-    retry_count: int         # incremented on each retry, exits at >= 3
-    error_message: str       # set when an agent fails
-
-    # Output
-    final_plan: str
+Inspect with the CLI scripts:
+```bash
+python scripts/list_runs.py
+python scripts/inspect_run.py <run_id>
 ```
 
----
+### Module 3 — Cost Guardrails
+`utils/cost_guard.py` defines:
+- Per-agent hard token caps (overrides YAML `max_tokens` if lower)
+- A soft USD cap per run (`$0.10` by default, trivially adjustable)
+- A max retry count (`3`)
 
-## Error Handling
+The orchestrator checks both limits before every routing decision.
 
-Three strategies work together to guarantee the graph always terminates cleanly:
+### Module 4 — Typed Failure Handling
+`utils/failure_classifier.py` inspects the error state and returns one of:
+`api_failure` · `prompt_parse_failure` · `validation_conflict` · `human_rejection` · `retry_exhaustion` · `cost_limit_exceeded`
 
-**1. Retry with backoff** (`utils/llm.py`)
-The `@retry` decorator on `call_llm_safe()` handles transient API errors (`RateLimitError`, `APITimeoutError`, `APIConnectionError`) automatically — waits 2s, 4s, 8s before giving up.
+`safe_exit_node` uses this to print an actionable message, persist a typed run record, and show which pipeline steps completed before failure.
 
-**2. `@safe_node` decorator** (`utils/error_handler.py`)
-Wraps every agent function. If anything raises an unexpected exception (bad JSON, missing key, empty response), the decorator catches it, prints the full traceback, sets `error_message` in state, and sets `status = "failed"` so the orchestrator routes to `safe_exit_node` instead of crashing Python.
+### Module 5 — SQLite Persistence
+`graph.py` uses `SqliteSaver` (LangGraph's SQLite checkpointer) writing to `data/runs.db`. This gives full LangGraph state history per thread and powers the `logger.py` observability tables in the same file.
 
-**3. `retry_count` guard** (`agents/orchestrator.py`)
-Every retry path increments `state["retry_count"]`. The orchestrator checks this first on every invocation. At `>= 3` it routes to `failed` regardless of what else is happening — guaranteeing no infinite loops.
-
----
-
-## Human-in-the-Loop (How the Pausing Works)
-
-LangGraph's `interrupt_before` mechanism is used with a `MemorySaver` checkpointer:
-
-```python
-app = builder.compile(
-    checkpointer=MemorySaver(),
-    interrupt_before=["checkpoint_1", "checkpoint_2"],
-)
-```
-
-When the graph reaches `checkpoint_1` or `checkpoint_2`, it **pauses before running that node** and returns control to `main.py`. The main loop then:
-
-1. Reads the current state with `app.get_state(config)`
-2. Displays the options to the user
-3. Collects input via `input()`
-4. Writes the feedback into state with `app.update_state(config, {...})`
-5. Resumes the graph with `app.invoke(None, config=config)`
-
-The `thread_id` in `config` is what ties all the resume calls to the same run — LangGraph uses it to look up the saved state in MemorySaver.
+### Module 6 — Travel Style Classifier
+Before the pipeline starts, `main.py` calls `classify_travel_style()` which computes budget-per-person-per-day and infers destination type from keyword matching, then returns `budget / mid-range / luxury / adventure`. The result is injected into `TravelPlanState.travel_style` and used by the itinerary agent to calibrate activity and restaurant recommendations. Inferences are logged to a `classifier_inferences` table. `classifier/model_metadata.yaml` and `training_data_v1.csv` provide a foundation for upgrading to a trained ML model when enough labelled data is available.
 
 ---
 
-## Key Concepts Demonstrated
+## Observability & Logs
 
-| Concept | Where |
-|---|---|
-| StateGraph with TypedDict | `state.py`, `graph.py` |
-| Conditional edges | `graph.py` → `route_by_status()` |
-| Human-in-the-loop with interrupt | `graph.py`, `main.py`, `checkpoints/` |
-| MemorySaver checkpointer | `graph.py` |
-| Multi-agent routing via shared state | `agents/orchestrator.py` |
-| Retry loops with state mutation | `checkpoints/checkpoint_1.py` |
-| Structured LLM output (JSON parsing) | All agents |
-| Error handling with graceful exit | `utils/error_handler.py`, `utils/safe_exit.py` |
-| Tenacity retry decorator | `utils/llm.py` |
+All data lands in `data/runs.db` (auto-created). Three tables:
 
----
+| Table | Contents |
+|-------|---------|
+| `llm_calls` | Per-call: agent, prompt version, tokens in/out, latency ms, cost USD, success, error |
+| `run_records` | Per-run: destination, status, failure type, total tokens, total cost, duration |
+| `classifier_inferences` | Per-run: travel style, budget/day, destination type, model version |
 
-## Development Phases
+```bash
+# List all runs
+python scripts/list_runs.py
 
-This project was built in 6 phases as a learning exercise:
-
-| Phase | What was built |
-|---|---|
-| 1 | Skeleton — all nodes as stubs, graph wired and running end-to-end |
-| 2 | Mock data — realistic hardcoded data, no LLM, full state flow verified |
-| 3 | Real LLM — Azure OpenAI GPT-4o calls, JSON parsing, per-agent error handling |
-| 4 | Human-in-the-loop — MemorySaver, interrupt_before, CLI pause/resume |
-| 5 | Error handling — @safe_node decorator, retry_count guard, safe exit |
-| 6 | Polish — ASCII + PNG diagram, enriched formatter, auto .txt save |
-
----
-
-## Sample Output
-
-```
-══════════════════════════════════════════════════════════════
-  ✈  TRAVEL PLAN  —  DUBAI
-  Generated: 30 Jul 2026, 14:30
-══════════════════════════════════════════════════════════════
-  TRIP AT A GLANCE
-──────────────────────────────────────────────────────────────
-  Destination  :  Dubai
-  Origin       :  New Delhi
-  Dates        :  30 July 2026 to 5 August 2026
-  Travellers   :  2
-  Budget       :  Rs 200,000
-──────────────────────────────────────────────────────────────
-  SELECTED FLIGHT
-──────────────────────────────────────────────────────────────
-  Airline   :  IndiGo 6E-148
-  Route     :  DEL -> DXB (non-stop)
-  Departs   :  30 Jul 2026, 06:00 (DEL)
-  Arrives   :  30 Jul 2026, 08:30 (DXB)
-  Cost      :  Rs 36,000  (Rs 18,000 / person)
-──────────────────────────────────────────────────────────────
-  BUDGET BREAKDOWN
-──────────────────────────────────────────────────────────────
-  Flights (per person)  :  Rs 18,000
-  Hotels (total)        :  Rs 75,000
-  Food (total)          :  Rs 20,000
-  Activities (total)    :  Rs 18,000
-  Buffer                :  Rs 10,000
-──────────────────────────────────────────────────────────────
-  ESTIMATED TOTAL       :  Rs 159,000  of Rs 200,000 budget
-  [████████████████████████████████████░░░░░░░░░░] 80%
-...
+# Deep-dive a specific run
+python scripts/inspect_run.py abc12345
 ```
 
 ---
 
-## Notes
+## Cost Guardrails
 
-- **Flight and hotel data is LLM-generated**, not from a live API. Prices and timings are realistic but fictional — always verify on an actual booking platform before purchasing.
-- **MemorySaver is in-memory only** — state is lost when the program exits. For a production version, replace with `SqliteSaver` or `PostgresSaver`.
-- The `.env` file must never be committed to version control. Add it to `.gitignore`.
+Default limits in `utils/cost_guard.py` (edit freely):
+
+| Setting | Default |
+|---------|---------|
+| Max cost per run | $0.10 USD |
+| Max retries per run | 3 |
+| Research token cap | 800 |
+| Budget token cap | 600 |
+| Flights token cap | 1,200 |
+| Hotels token cap | 1,200 |
+| Itinerary token cap | 2,500 |
+| Validator token cap | 800 |
+
+A full successful run on GPT-4o-mini typically costs under $0.03 USD.
+
+---
+
+## Prompt Versioning
+
+To update a prompt without touching code:
+
+```bash
+# Copy existing prompt
+cp prompts/research/v1.yaml prompts/research/v2.yaml
+
+# Edit v2.yaml — change system_message, temperature, or max_tokens
+# Update prompt_version: "research-v2"
+
+# Next run automatically picks up v2 (latest version wins)
+```
+
+The version used is stored in state and shown in the final plan under **LLM USAGE SUMMARY**.
+
+---
+
+## Travel Style Classifier
+
+| Style | Budget per person/day |
+|-------|----------------------|
+| Budget | < ₹3,000 |
+| Mid-range | ₹3,000 – ₹8,000 |
+| Luxury | > ₹8,000 |
+| Adventure | ≥ ₹3,000 + adventure destination |
+
+Adventure destinations are detected by keyword (Bali, Nepal, Rishikesh, Ladakh, etc.). The thresholds and destination keywords live in `model_metadata.yaml` and `travel_style_classifier.py` and can be adjusted without touching any agent code.
+
+---
