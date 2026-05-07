@@ -1,0 +1,18 @@
+model_name: "travel_style_classifier"
+model_version: "v1.0.0"
+model_type: "rule_based"
+training_data_version: "v1"
+training_data_file: "classifier/training_data_v1.csv"
+feature_description:
+  - "budget_per_person_per_day_inr: total budget divided by travelers and days"
+  - "destination_type: inferred from destination string (beach/city/mountain/adventure)"
+class_labels:
+  - "budget"
+  - "mid-range"
+  - "luxury"
+  - "adventure"
+thresholds:
+  budget_upper: 3000
+  mid_range_upper: 8000
+deployed_at: "2025-01-01"
+notes: "Rule-based v1. Replace with sklearn LogisticRegression when labeled data > 100 samples."

@@ -1,10 +1,8 @@
 from state import TravelPlanState
 from utils.llm import call_llm_safe
 from utils.error_handler import safe_node
+from utils.prompt_loader import load_prompt
 
-SYSTEM = """You are a meticulous travel plan reviewer. You check itineraries for
-logical errors, budget consistency, scheduling conflicts, and practical issues.
-Be concise and specific. If everything looks good, say so clearly."""
 
 @safe_node
 def validator_node(state: TravelPlanState) -> TravelPlanState:
@@ -41,6 +39,12 @@ def validator_node(state: TravelPlanState) -> TravelPlanState:
 
     print(f"  [OK] Local checks passed — calling LLM for deep review...")
 
+    prompt_config  = load_prompt("validator")
+    system_message = prompt_config["system_message"]
+    temperature    = prompt_config["temperature"]
+    max_tokens     = prompt_config["max_tokens"]
+    prompt_version = prompt_config["prompt_version"]
+
     user_prompt = f"""Review this travel plan for issues.
 
 TRIP:
@@ -74,12 +78,33 @@ OR
 
 No markdown."""
 
-    try:
-        notes = call_llm_safe(SYSTEM, user_prompt).strip()
-        print(f"  [OK] LLM review complete")
-    except Exception as e:
-        print(f"  [WARN] LLM validation unavailable ({e}) — using local result")
+    result = call_llm_safe(
+        prompt=user_prompt,
+        system=system_message,
+        agent_name="validator",
+        prompt_version=prompt_version,
+        run_id=state.get("run_id", "unknown"),
+        temperature=temperature,
+        max_tokens=max_tokens,
+    )
+
+    state = {
+        **state,
+        "total_tokens_in":  state.get("total_tokens_in",  0) + result["tokens_in"],
+        "total_tokens_out": state.get("total_tokens_out", 0) + result["tokens_out"],
+        "total_cost_usd":   state.get("total_cost_usd",   0.0) + result["cost_usd"],
+        "prompt_versions_used": {
+            **state.get("prompt_versions_used", {}),
+            "validator": prompt_version,
+        },
+    }
+
+    if not result["success"]:
         notes = "All checks passed (LLM review unavailable — local checks passed)."
+        print(f"  [WARN] LLM validation unavailable ({result['error']}) — using local result")
+    else:
+        notes = result["content"].strip()
+        print(f"  [OK] LLM review complete")
 
     return {
         **state,

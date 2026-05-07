@@ -1,6 +1,8 @@
 import os
 from datetime import datetime
 from state import TravelPlanState
+from utils.logger import persist_run_record
+
 
 def generate_final_plan(state: TravelPlanState) -> str:
     sf  = state.get("selected_flight", {})
@@ -34,6 +36,8 @@ def generate_final_plan(state: TravelPlanState) -> str:
         f"  Dates        :  {state.get('travel_dates', 'N/A')}",
         f"  Travellers   :  {state.get('num_travelers', 'N/A')}",
         f"  Budget       :  {money(state.get('budget_inr', 0))}",
+        f"  Travel Style :  {state.get('travel_style', 'N/A').upper()}",
+        f"  Run ID       :  {state.get('run_id', 'N/A')}",
         "",
         *section("DESTINATION OVERVIEW"),
         _wrap(state.get("destination_info", "N/A"), W - 4),
@@ -81,6 +85,12 @@ def generate_final_plan(state: TravelPlanState) -> str:
         "",
         *section("VALIDATION SUMMARY"),
         _wrap(state.get("validation_notes", "N/A"), W - 4),
+        "",
+        *section("LLM USAGE SUMMARY"),
+        f"  Prompt versions : {state.get('prompt_versions_used', {})}",
+        f"  Tokens in       : {state.get('total_tokens_in', 0):,}",
+        f"  Tokens out      : {state.get('total_tokens_out', 0):,}",
+        f"  Est. cost       : ${state.get('total_cost_usd', 0.0):.4f} USD",
         "",
         thick,
         "    Plan complete. Have a wonderful trip!",
@@ -131,8 +141,23 @@ def save_plan_to_file(plan: str, destination: str) -> str:
 def final_plan_node(state: TravelPlanState) -> TravelPlanState:
     print("\n[FINAL PLAN] Generating formatted travel plan...")
 
-    plan     = generate_final_plan(state)
+    plan = generate_final_plan(state)
     print(plan)
+
+    # Persist success record to SQLite
+    try:
+        persist_run_record(
+            run_id=state.get("run_id", "unknown"),
+            destination=state.get("destination", ""),
+            status="completed",
+            failure_type=None,
+            exit_reason=None,
+            total_tokens=state.get("total_tokens_in", 0) + state.get("total_tokens_out", 0),
+            total_cost_usd=state.get("total_cost_usd", 0.0),
+            duration_seconds=0.0
+        )
+    except Exception as e:
+        print(f"\n  [WARN] Could not persist run record: {e}")
 
     # Save to file automatically
     try:

@@ -1,0 +1,13 @@
+budget_per_person_per_day_inr,destination_type,travel_style_label
+1500,city,budget
+2000,beach,budget
+2800,mountain,budget
+3500,city,mid-range
+5000,beach,mid-range
+7500,mountain,mid-range
+9000,city,luxury
+12000,beach,luxury
+15000,mountain,luxury
+4000,adventure,adventure
+6000,adventure,adventure
+8000,adventure,adventure

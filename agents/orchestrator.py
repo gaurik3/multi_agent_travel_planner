@@ -1,4 +1,5 @@
 from state import TravelPlanState
+from utils.cost_guard import check_run_cost_limit, check_retry_limit
 
 ROUTE_MAP = {
     "start":           "research",
@@ -53,11 +54,13 @@ def orchestrator_node(state: TravelPlanState) -> TravelPlanState:
 
 
 def route_by_status(state: TravelPlanState) -> str:
-    status = state.get("status", "failed")
-    retry  = state.get("retry_count", 0)
-
-    if retry >= 3:
+    # Guardrail checks — always run first
+    if not check_retry_limit(state.get("retry_count", 0)):
         return "failed"
+    if not check_run_cost_limit(state.get("total_cost_usd", 0.0)):
+        return "failed"
+
+    status = state.get("status", "failed")
 
     if status in VALID_TARGETS:
         return status

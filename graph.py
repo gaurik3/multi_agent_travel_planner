@@ -2,7 +2,7 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(__file__))
 from langgraph.graph import StateGraph, END
-from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.sqlite import SqliteSaver
 from state import TravelPlanState
 from agents.orchestrator      import orchestrator_node, route_by_status
 from agents.research          import research_node
@@ -62,12 +62,16 @@ def build_graph(use_checkpointer: bool = True):
     builder.add_edge("failed",     END)
 
     if use_checkpointer:
-        checkpointer = MemorySaver()
+        import sqlite3
+        DB_PATH = os.path.join(os.path.dirname(__file__), "data", "runs.db")
+        os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+        conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+        checkpointer = SqliteSaver(conn)
         app = builder.compile(
             checkpointer=checkpointer,
             interrupt_before=["checkpoint_1", "checkpoint_2"],
         )
-        print("[GRAPH] Compiled with MemorySaver + interrupt_before checkpoints")
+        print("[GRAPH] Compiled with SqliteSaver + interrupt_before checkpoints")
     else:
         app = builder.compile()
         print("[GRAPH] Compiled without checkpointer")

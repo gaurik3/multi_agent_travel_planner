@@ -1,10 +1,15 @@
 import sys
 import os
 import uuid
+import time
 sys.path.insert(0, os.path.dirname(__file__))
 from graph import app
 from state import TravelPlanState
 from utils.diagram import print_ascii_diagram, export_png_diagram
+from utils.logger import init_db
+from utils.cost_guard import format_cost_summary
+from classifier.travel_style_classifier import classify_travel_style
+
 
 def banner(title: str):
     W = 62
@@ -12,13 +17,16 @@ def banner(title: str):
     print(f"  {title}")
     print("═" * W)
 
+
 def get_next_nodes(config: dict) -> tuple:
     snapshot = app.get_state(config)
     return snapshot.next if snapshot else ()
 
+
 def get_current_state(config: dict) -> dict:
     snapshot = app.get_state(config)
     return snapshot.values if snapshot else {}
+
 
 def collect_trip_inputs() -> TravelPlanState:
     banner("MULTI-AGENT TRAVEL PLANNER  —  Powered by LangGraph + GPT-4o")
@@ -67,29 +75,7 @@ def collect_trip_inputs() -> TravelPlanState:
         print("  Cancelled. Restart to try again.")
         sys.exit(0)
 
-    return {
-        "destination":       destination,
-        "origin":            origin,
-        "travel_dates":      travel_dates,
-        "num_travelers":     num_travelers,
-        "budget_inr":        budget_inr,
-        "destination_info":  "",
-        "visa_info":         "",
-        "best_travel_tips":  "",
-        "budget_breakdown":  {},
-        "flight_options":    [],
-        "selected_flight":   {},
-        "hotel_options":     [],
-        "selected_hotel":    {},
-        "itinerary":         "",
-        "validation_notes":  "",
-        "human_feedback_1":  "",
-        "human_feedback_2":  "",
-        "status":            "",
-        "retry_count":       0,
-        "error_message":     "",
-        "final_plan":        "",
-    }
+    return destination, origin, travel_dates, num_travelers, budget_inr
 
 
 def collect_flight_choice(state: dict) -> str:
@@ -134,19 +120,73 @@ def collect_final_approval(state: dict) -> str:
         feedback = input("  Response cannot be empty: ").strip()
     return feedback
 
+
 def main():
+    # Initialise DB tables once at startup
+    init_db()
+
     print_ascii_diagram(app)
 
     base_dir = os.path.dirname(os.path.abspath(__file__))
     png_path = os.path.join(base_dir, "graph_diagram.png")
     export_png_diagram(app, png_path)
 
+    # Collect user inputs
+    destination, origin, travel_dates, num_travelers, budget_inr = collect_trip_inputs()
+
+    # Generate unique run_id
+    run_id = str(uuid.uuid4())[:8]
+    print(f"\n  Run ID: {run_id}")
+
+    # Run travel style classifier (Module 6)
+    classifier_result = classify_travel_style(
+        budget_inr=budget_inr,
+        num_travelers=num_travelers,
+        travel_dates=travel_dates,
+        destination=destination,
+        run_id=run_id
+    )
+    print(f"\n  Travel style detected: {classifier_result['travel_style'].upper()}")
+    print(f"  Budget per person/day : ₹{classifier_result['budget_per_person_per_day']:,.0f}")
+    print(f"  Destination type      : {classifier_result['destination_type']}")
+
     thread_id = str(uuid.uuid4())
     config    = {"configurable": {"thread_id": thread_id}}
 
-    initial_state = collect_trip_inputs()
+    initial_state = {
+        "destination":          destination,
+        "origin":               origin,
+        "travel_dates":         travel_dates,
+        "num_travelers":        num_travelers,
+        "budget_inr":           budget_inr,
+        "destination_info":     "",
+        "visa_info":            "",
+        "best_travel_tips":     "",
+        "budget_breakdown":     {},
+        "flight_options":       [],
+        "selected_flight":      {},
+        "hotel_options":        [],
+        "selected_hotel":       {},
+        "itinerary":            "",
+        "validation_notes":     "",
+        "human_feedback_1":     "",
+        "human_feedback_2":     "",
+        "status":               "",
+        "retry_count":          0,
+        "error_message":        "",
+        "failure_type":         "",
+        "final_plan":           "",
+        "run_id":               run_id,
+        "total_tokens_in":      0,
+        "total_tokens_out":     0,
+        "total_cost_usd":       0.0,
+        "prompt_versions_used": {},
+        "travel_style":         classifier_result["travel_style"],
+    }
+
     print("\n  ▶  Agents are working on your plan...\n")
 
+    run_start = time.time()
     app.invoke(initial_state, config=config)
 
     while "checkpoint_1" in get_next_nodes(config):
@@ -187,8 +227,15 @@ def main():
 
     banner("YOUR TRAVEL PLAN IS COMPLETE  ")
     print(f"  Thread ID : {thread_id}")
+    print(f"  Run ID    : {run_id}")
     print(f"  The plan has been printed above and saved to a .txt file")
     print(f"  Graph diagram saved to: graph_diagram.png\n")
+
+    # Print cost summary
+    print(format_cost_summary(
+        final_state.get("total_tokens_in", 0),
+        final_state.get("total_tokens_out", 0)
+    ))
 
 
 if __name__ == "__main__":

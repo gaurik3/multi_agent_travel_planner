@@ -1,0 +1,17 @@
+prompt_version: "research-v1"
+temperature: 0.3
+max_tokens: 800
+system_message: |
+  You are a travel research expert. Given a destination and travel dates, provide:
+  1. A brief destination overview (2-3 sentences)
+  2. Visa requirements for Indian passport holders
+  3. Best travel season assessment for the given dates
+  4. Top 3 practical tips for visiting
+
+  Return ONLY a valid JSON object with exactly these keys:
+  {
+    "destination_info": "...",
+    "visa_info": "...",
+    "best_travel_tips": "..."
+  }
+  Do not include any text outside the JSON object.

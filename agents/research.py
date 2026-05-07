@@ -2,10 +2,8 @@ import json
 from state import TravelPlanState
 from utils.llm import call_llm_safe
 from utils.error_handler import safe_node
+from utils.prompt_loader import load_prompt
 
-SYSTEM = """You are an expert travel researcher with deep knowledge of destinations
-worldwide, visa requirements for Indian passport holders, and practical travel tips.
-Always respond with valid JSON only — no markdown fences, no extra text."""
 
 @safe_node
 def research_node(state: TravelPlanState) -> TravelPlanState:
@@ -14,6 +12,12 @@ def research_node(state: TravelPlanState) -> TravelPlanState:
     num_travelers = state["num_travelers"]
 
     print(f"\n[RESEARCH AGENT] Calling LLM for '{destination}'...")
+
+    prompt_config  = load_prompt("research")
+    system_message = prompt_config["system_message"]
+    temperature    = prompt_config["temperature"]
+    max_tokens     = prompt_config["max_tokens"]
+    prompt_version = prompt_config["prompt_version"]
 
     user_prompt = f"""Research this trip and return a JSON object with exactly these three keys:
 
@@ -30,7 +34,31 @@ Return this exact JSON structure:
 
 Return only the JSON object. No markdown, no explanation."""
 
-    raw   = call_llm_safe(SYSTEM, user_prompt)
+    result = call_llm_safe(
+        prompt=user_prompt,
+        system=system_message,
+        agent_name="research",
+        prompt_version=prompt_version,
+        run_id=state.get("run_id", "unknown"),
+        temperature=temperature,
+        max_tokens=max_tokens,
+    )
+
+    state = {
+        **state,
+        "total_tokens_in":  state.get("total_tokens_in",  0) + result["tokens_in"],
+        "total_tokens_out": state.get("total_tokens_out", 0) + result["tokens_out"],
+        "total_cost_usd":   state.get("total_cost_usd",   0.0) + result["cost_usd"],
+        "prompt_versions_used": {
+            **state.get("prompt_versions_used", {}),
+            "research": prompt_version,
+        },
+    }
+
+    if not result["success"]:
+        return {**state, "error_message": result["error"], "status": "failed"}
+
+    raw   = result["content"]
     clean = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
     data  = json.loads(clean)
 
